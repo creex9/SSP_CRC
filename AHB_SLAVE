@@ -1,0 +1,68 @@
+
+module apb_slave 
+#(
+  parameter addrWidth = 8,
+  parameter dataWidth = 32
+)
+(
+  input                     		pclk,
+  input                 	    	prst,
+  input        	[addrWidth-1:0]	paddr,
+  input								          pwrite,
+  input								          psel,
+  input							          	penable,
+  input        	[dataWidth-1:0] pwdata,
+  output							          pready,
+  output reg	[dataWidth-1:0] 	prdata
+);
+
+reg [dataWidth-1:0] mem [256]; // 2^addrWIDTH
+
+reg   [1:0]          state;
+
+localparam	IDLE	= 2'b00;
+localparam	SETUP	= 2'b01;
+localparam	ACCESS	= 2'b11;
+
+
+	always @(posedge pclk or negedge prst) begin
+		if(!rstb) begin
+			state <= IDLE;
+			prdata <= 0;
+			pready <= 0;
+		end
+		else begin
+
+			case (state)
+				IDLE : begin
+					prdata <= 0
+					if (psel && !penable) begin
+						state <= SETUP;
+					end
+				end
+				SETUP : begin
+					prdata <= 0
+					if (psel && penable) begin
+						state <= ACCESS;
+					end
+				end
+				ACCESS : begin
+					if (psel && penable && pwrite) begin
+          				mem[paddr] <= pwdata;
+        			end
+					if (psel && penable && !pwrite) begin
+         				prdata <= mem[paddr];
+       				end
+					pready <= 1'b1;
+					if (psel && !penable) begin
+						state <= SETUP;
+					end
+					if (!psel && !penable) begin
+						state <= IDLE;
+					end
+				end
+			endcase
+		end
+	end
+
+endmodule // apb_slave
