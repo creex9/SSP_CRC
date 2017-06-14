@@ -1,4 +1,4 @@
-module AHB_MAST #(parameter [31:0] DATA_WIDTH = 32'd32,ADDR_WIDTH = 32'd32)(
+module AHB_MAST #(parameter [31:0] DATA_WIDTH = 32'd32,ADDR_WIDTH = 16)(
 
     //GENERAL SIGNALS
     input wire HCLK,
@@ -10,12 +10,12 @@ module AHB_MAST #(parameter [31:0] DATA_WIDTH = 32'd32,ADDR_WIDTH = 32'd32)(
     input wire HRESP,                       // Transfer status(HERE ALWAYS OKAY) : LOW- OKAY, HIGH-ERROR
 
     //CONF REGISTERs INPUTs
-    input reg                       REGs_ready,
-    input reg   [ADDR_WIDTH-1:0]    DADR,
-    input reg   [ADDR_WIDTH-1:0]    CADR,
-    input reg                       DLEN,
-    input reg                       DBIT,   
-
+    input wire                   REGs_ready,// 1 when regs are available
+    input wire [ADDR_WIDTH-1:0]  DADR,      //goes to HADDR, addres of data
+    input wire [ADDR_WIDTH-1:0]  CADR,      //goes to HADDR, where save the sum
+    input wire [1:0]             DLEN,    //Single data 16bit 00|one row 16bit x4 01| 10 Burst 2 rows 16bit x4 x2
+    input wire                   isSumReady;
+    input wire [DATA_WIDTH-1:0]  SUM;
 
     //MASTER OUT
     output reg [ADDR_WIDTH-1:0] HADDR,      // ADDR to slave, lasts for a single HCLK cycle
@@ -27,6 +27,11 @@ module AHB_MAST #(parameter [31:0] DATA_WIDTH = 32'd32,ADDR_WIDTH = 32'd32)(
     output reg HMASTLOCK                    // HIGH when locked sequence
     
 );
+    //DLEN types
+    localparam [1:0] SingleData      = 2'b00;
+    localparam [1:0] OneRow          = 2'b01;
+    localparam [1:0] Brst2Row        = 2'b10;
+
     //HTRANS TYPES
     localparam [1:0] IDLE       = 2'b00;
     localparam [1:0] BUSY       = 2'b01;    //Not used
@@ -47,13 +52,12 @@ module AHB_MAST #(parameter [31:0] DATA_WIDTH = 32'd32,ADDR_WIDTH = 32'd32)(
     //
 
     //AHB SIZES
-    localparam [2:0] BYTE       = 3'b000;   // 8bits
-    localparam [2:0] HALFWORD   = 3'b001;   // 16bits
-    localparam [2:0] WORD       = 3'b010;   // 32bits
+    localparam [2:0] BYTE       = 3'b000;   // 8bits    NOTused
+    localparam [2:0] HALFWORD   = 3'b001;   // 16bits   USED
+    localparam [2:0] WORD       = 3'b010;   // 32bits   NOTused
 
     //Unused signals
     assign HMASTLOCK            = 1'b0  ;
-    assign HRESP                = 1'b0  ;
 
     //Local REGs
     reg [ADDR_WIDTH-1:0]  NEXT_ADDR;
@@ -64,17 +68,21 @@ module AHB_MAST #(parameter [31:0] DATA_WIDTH = 32'd32,ADDR_WIDTH = 32'd32)(
     reg [2:0]             TMP_BURST;    //
     reg [1:0]             NEXT_HTRANS;
     reg                   NEXT_HWRITE;
+    reg [ADDR_WIDTH-1:0]  WHERE_SAVE;
+    reg [1:0]             NEXT_DLEN;
+
+    reg [ADDR_WIDTH-1:0]  rDADR;      //goes to HADDR, addres of data
+    reg [ADDR_WIDTH-1:0]  rCADR;      //goes to HADDR, where save the sum
+    reg [1:0]             rDLEN; 
+    reg [DATA_WIDTH-1:0]  DataFromSlave;
 
     //States
     localparam [3:0] IDLE_STATE     = 4'b0000;
-    localparam [3:0] SINGLE_START   = 4'b0001;
-    localparam [3:0] SINGLE_READY   = 4'b0010;
+    localparam [3:0] SINGLE_ADDRES  = 4'b0001;
+    localparam [3:0] SINGLE_DATA    = 4'b0010;
     localparam [3:0] SINGLE_STOP    = 4'b0100;
-    localparam [3:0] ADDR_BURST     = 4'b1110;
-    localparam [3:0] DATA_BURST     = 4'b1101;
- //   localparam [3:0] BUSY_BURST     = 4'b1011;
-    localparam [3:0] READ_BURST     = 4'b0111;
-    localparam [3:0] END_BURST      = 4'b1100;
+    localparam [3:0] BURST_START    = 4'b1110;
+
 
 
 always @(posedge HCLK or negedge RESET) begin
@@ -82,7 +90,7 @@ always @(posedge HCLK or negedge RESET) begin
         HADDR   <= {ADDR_WIDTH{1'b0}};
         HWDATA  <= {DATA_WIDTH{1'b0}};
         HBURST  <=  SINGLE;
-        HSIZE   <=  HALFWORD;   // ??? or byte ?
+        HSIZE   <=  HALFWORD;
         HWRITE  <=  1'b0;
         HTRANS  <=  IDLE; 
     end
@@ -97,18 +105,27 @@ always @(posedge HCLK or negedge RESET) begin
     end
 end
 
+always @(posedge REGs_ready) begin
+    rDLEN <= DLEN;
+    rCADR <= CADR;
+    rDADR <= DADR;
+    if(isSumReady == 1'b1)begin
+        NEXT_HWRITE <= 1'b1;
+    end
+end
+
 
 always @(*) begin
-    
+
     case(STATE)
     IDLE_STATE: begin
         if(HREADY == 1'b1) begin
-            if(TMP_BURST == SINGLE)begin
-                NEXT_STATE  = SINGLE_START;
+            if(rDLEN == SingleData)begin
+                NEXT_STATE  = SINGLE_ADDRES;
                 NEXT_HTRANS = NONSEQ;
             end
-            else  begin         //if(TMP_BURST == INCR)
-                NEXT_STATE  = ADDR_BURST;
+            else begin  
+                NEXT_STATE  = BURST_START;     //poczatek bursta
                 NEXT_HTRANS = NONSEQ;
             end
         end
@@ -118,103 +135,60 @@ always @(*) begin
         end
         end
 
-    SINGLE_START: begin
+    SINGLE_ADDRES: begin
         if(HREADY == 1'b1) begin
-            NEXT_STATE  = SINGLE_READY
-            NEXT_HTRANS = IDLE;
+            if(NEXT_HWRITE == 1'b1) begin
+            NEXT_STATE  = SINGLE_DATA_WRITE;
+            NEXT_HTRANS = NONSEQ;
+            NEXT_HWDATA = rDADR;
         end
         else begin
-            NEXT_STATE  = SINGLE_START;
+            NEXT_STATE  = SINGLE_DATA_READ;
             NEXT_HTRANS = NONSEQ;
+            NEXT_ADDR   = rDADR;
         end
     end
-        
-    SINGLE_READY: begin
-        if(HRESP == 1'b0) begin
-            if(HREADY == 1'b1 ) begin
-                NEXT_STATE = SINGLE_STOP;
-
-            end 
-            else begin
-                NEXT_STATE = SINGLE_READY;
-            end
-        end 
-        NEXT_HTRANS = IDLE;
-
     end
 
-    SINGLE_STOP: begin
-        NEXT_STATE  = IDLE_STATE;
-        NEXT_HTRANS = IDLE;
-    end
+    SINGLE_DATA_READ: begin
+        if(HREADY==1'b1) begin
+            DataFromSlave = HRDATA;
+            NEXT_STATE = IDLE_STATE;
+        end
+        else begin
+            NEXT_STATE = SINGLE_DATA;
+            NEXT_STATE = NONSEQ;
+        end
 
-    ADDR_BURST: begin
-    if(HREADY == 1'b1)
-        if(HBURST == INCR) begin
-            NEXT_STATE = DATA_BURST;
-            NEXT_HTRANS = SEQ;
-        end else begin
-            if(NEXT_HWRITE == 1'b1) begin
-            NEXT_STATE = END_BURST;
+    end
+    SINGLE_DATA_WRITE: begin
+        if(HREADY == 1'b1) begin
+            NEXT_HWDATA = SUM;
+            NEXT_STATE = IDLE_STATE;
             NEXT_HTRANS = IDLE;
         end else begin
-            NEXT_STATE = READ_BURST;
-            NEXT_HTRANS = SEQ;
-        end
-    end
-    else begin
-        NEXT_STATE = ADDR_BURST;
-        NEXT_HTRANS = NONSEQ;
-    end
-    end
-
-    DATA_BURST:
-    if(TMP_BURST == INCR) begin
-        if(HREADY == 1'b1) begin
-            if(NEXT_HWRITE == 1'b1) begin
-                NEXT_STATE = ADDR_BURST;
-                NEXT_HTRANS = SEQ;
-            end else begin
-                NEXT_STATE = READ_BURST;
-                NEXT_HTRANS = SEQ;
-                end
-        end else begin
-            NEXT_STATE = DATA_BURST;
-            NEXT_HTRANS = SEQ;
-        end
-    end
-    else begin
-        NEXT_STATE = END_BURST;
-        NEXT_HTRANS = IDLE;
-    end
-
-
-/// THIS READ is bad 
-    READ_BURST:
-        if(TMP_BURST == INCR) begin
-            NEXT_STATE = ADDR_BURST;
-            NEXT_HTRANS = SEQ;
-        end else begin
-            NEXT_STATE = DATA_BURST;
-            NEXT_HTRANS = SEQ;
+            NEXT_HWDATA = SUM;
+            NEXT_STATE = SINGLE_DATA_WRITE;
+            NEXT_HTRANS = NONSEQ;
         end
 
-    END_BURST: begin
-        NEXT_STATE = IDLE_STATE;
-        NEXT_HTRANS = IDLE;
-    end    
 
-    default: begin
-        NEXT_STATE = IDLE_STATE;
-        NEXT_HTRANS = IDLE;
     end
-    endcase
+
+
+
+    BURST_START: begin
+        if () begin
+            
+        end
+
+
+
+
+    end
+
 end
 
-always @(*) begin
-    
-    case()
-end
 
 
 endmodule
