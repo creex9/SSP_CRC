@@ -1,4 +1,4 @@
-module AHB_MAST #(parameter [31:0] DATA_WIDTH = 32'd32,ADDR_WIDTH = 16)(
+module AHB_MASTER #(parameter [31:0] DATA_WIDTH = 32'd16,ADDR_WIDTH = 16)(
 
     //GENERAL SIGNALS
     input wire HCLK,
@@ -13,24 +13,30 @@ module AHB_MAST #(parameter [31:0] DATA_WIDTH = 32'd32,ADDR_WIDTH = 16)(
     input wire                   REGs_ready,// 1 when regs are available
     input wire [ADDR_WIDTH-1:0]  DADR,      //goes to HADDR, addres of data
     input wire [ADDR_WIDTH-1:0]  CADR,      //goes to HADDR, where save the sum
-    input wire [1:0]             DLEN,    //Single data 16bit 00|one row 16bit x4 01| 10 Burst 2 rows 16bit x4 x2
-    input wire                   isSumReady;
-    input wire [DATA_WIDTH-1:0]  SUM;
-
+    input wire [1:0]             DLEN,    //Singl edata 16bit 00|one row 16bit x4 01| 10 Burst 2 rows 16bit x4 x2
+    input wire                   isSumReady,
+    input wire [DATA_WIDTH-1:0]  SUM1,
+    input wire [DATA_WIDTH-1:0]  SUM2,
+    input wire [DATA_WIDTH-1:0]  SUM3,
+    input wire [DATA_WIDTH-1:0]  SUM4,
+    input wire [DATA_WIDTH-1:0]  SUM5,
+    input wire [DATA_WIDTH-1:0]  SUM6,
+    input wire [DATA_WIDTH-1:0]  SUM7,
+    input wire [DATA_WIDTH-1:0]  SUM8,
     //MASTER OUT
     output reg [ADDR_WIDTH-1:0] HADDR,      // ADDR to slave, lasts for a single HCLK cycle
     output reg [DATA_WIDTH-1:0] HWDATA,     // DATA form Master to Slave
     output reg [2:0] HBURST,                // BURST type : single incr wrap
-    output reg [2:0] HSIZE,                 // SIZE of transfer : byte, halfword or word - max 1024bits
+    output wire [2:0] HSIZE,                 // SIZE of transfer : byte, halfword or word - max 1024bits
     output reg [1:0] HTRANS,                // Transfer type:  IDLE,BUSY,NONSEQ,SEQ
     output reg HWRITE,                      // Transfer direction: HIGH-write, LOW-read
-    output reg HMASTLOCK                    // HIGH when locked sequence
+    output wire HMASTLOCK                    // HIGH when locked sequence
     
 );
     //DLEN types
-    localparam [1:0] SingleData      = 2'b00;
-    localparam [1:0] OneRow          = 2'b01;
-    localparam [1:0] Brst2Row        = 2'b10;
+    localparam [1:0] SingleData = 2'b00;
+    localparam [1:0] OneRow     = 2'b01;
+    localparam [1:0] Brst2Row   = 2'b10;
 
     //HTRANS TYPES
     localparam [1:0] IDLE       = 2'b00;
@@ -58,6 +64,7 @@ module AHB_MAST #(parameter [31:0] DATA_WIDTH = 32'd32,ADDR_WIDTH = 16)(
 
     //Unused signals
     assign HMASTLOCK            = 1'b0  ;
+    assign HSIZE                = 3'b001;
 
     //Local REGs
     reg [ADDR_WIDTH-1:0]  NEXT_ADDR;
@@ -69,20 +76,39 @@ module AHB_MAST #(parameter [31:0] DATA_WIDTH = 32'd32,ADDR_WIDTH = 16)(
     reg [1:0]             NEXT_HTRANS;
     reg                   NEXT_HWRITE;
     reg [ADDR_WIDTH-1:0]  WHERE_SAVE;
-    reg [1:0]             NEXT_DLEN;
+    reg [1:0]             NEXT_DLEN ;
 
     reg [ADDR_WIDTH-1:0]  rDADR;      //goes to HADDR, addres of data
     reg [ADDR_WIDTH-1:0]  rCADR;      //goes to HADDR, where save the sum
     reg [1:0]             rDLEN; 
-    reg [DATA_WIDTH-1:0]  DataFromSlave;
+    reg [DATA_WIDTH-1:0]  DataFromSlave[0:7];
+    reg                   WhichBurst; // 0- oneRow, 1-doubleRow
+    reg                   isFinished;
+    reg [2:0]             iterator;
+    reg [DATA_WIDTH-1:0] SUM [0:7];
+
 
     //States
-    localparam [3:0] IDLE_STATE     = 4'b0000;
-    localparam [3:0] SINGLE_ADDRES  = 4'b0001;
-    localparam [3:0] SINGLE_DATA    = 4'b0010;
-    localparam [3:0] SINGLE_STOP    = 4'b0100;
-    localparam [3:0] BURST_START    = 4'b1110;
+    localparam [3:0] IDLE_STATE             = 4'b0000;
+    localparam [3:0] SINGLE_ADDRES          = 4'b0001;
+    localparam [3:0] SINGLE_DATA_READ       = 4'b0010;
+    localparam [3:0] SINGLE_DATA_WRITE      = 4'b0100;
+    localparam [3:0] SINGLE_STOP            = 4'b1000;
+    localparam [3:0] BURST_START            = 4'b1110;
+    localparam [3:0] BURST_RD_NEXT          = 4'b1100;
+    localparam [3:0] BURST_WR_NEXT          = 4'b0011;
+    localparam [3:0] BURST_STOP             = 4'b1110;
 
+always@(*) begin
+    SUM[0] = SUM1;
+    SUM[1] = SUM2;
+    SUM[2] = SUM3;
+    SUM[3] = SUM4;
+    SUM[4] = SUM5;
+    SUM[5] = SUM6;
+    SUM[6] = SUM7;
+    SUM[7] = SUM8;
+end
 
 
 always @(posedge HCLK or negedge RESET) begin
@@ -90,8 +116,9 @@ always @(posedge HCLK or negedge RESET) begin
         HADDR   <= {ADDR_WIDTH{1'b0}};
         HWDATA  <= {DATA_WIDTH{1'b0}};
         HBURST  <=  SINGLE;
-        HSIZE   <=  HALFWORD;
         HWRITE  <=  1'b0;
+        STATE   <=  IDLE_STATE;
+        NEXT_STATE <= IDLE_STATE;
         HTRANS  <=  IDLE; 
     end
     else begin
@@ -99,48 +126,82 @@ always @(posedge HCLK or negedge RESET) begin
         HADDR   <= NEXT_ADDR;
         HWDATA  <= NEXT_HWDATA;
         HBURST  <= TMP_BURST;
-        HSIZE   <= TMP_SIZE;
         HWRITE  <= NEXT_HWRITE;
         HTRANS  <= NEXT_HTRANS;
     end
 end
 
 always @(posedge REGs_ready) begin
-    rDLEN <= DLEN;
-    rCADR <= CADR;
-    rDADR <= DADR;
-    if(isSumReady == 1'b1)begin
-        NEXT_HWRITE <= 1'b1;
+    rDLEN = DLEN;               //WORKING !
+    rCADR = CADR;
+    rDADR = DADR;
+    isFinished = 1'b0;
+end
+
+always @(*) begin
+    if(isSumReady == 1'b1) begin
+        NEXT_HWRITE = 1;       //WORKING
+    end else begin
+        NEXT_HWRITE = 0;
     end
 end
+
+always @(*) begin
+    case(rDLEN)
+    SingleData: begin
+        TMP_BURST = SINGLE;
+        end
+                            //WORKING
+    OneRow: begin
+        TMP_BURST = INCR;
+        WhichBurst = 1'b0;
+    end
+
+    Brst2Row: begin
+        TMP_BURST = INCR;
+        WhichBurst = 1'b1;
+    end
+    endcase
+    
+end
+
 
 
 always @(*) begin
 
     case(STATE)
     IDLE_STATE: begin
+    NEXT_ADDR = 16'bzzzzzz;
         if(HREADY == 1'b1) begin
-            if(rDLEN == SingleData)begin
-                NEXT_STATE  = SINGLE_ADDRES;
-                NEXT_HTRANS = NONSEQ;
-            end
-            else begin  
-                NEXT_STATE  = BURST_START;     //poczatek bursta
-                NEXT_HTRANS = NONSEQ;
+            if(isFinished == 0) begin
+                if(TMP_BURST == SINGLE)begin //was rDLEN
+                    NEXT_STATE  = SINGLE_ADDRES;
+                    NEXT_HTRANS = NONSEQ;
+                end
+                else begin  
+                    NEXT_STATE  = BURST_START; 
+                    iterator = 0; 
+                    NEXT_HTRANS = IDLE;
+                end
+            end else begin
+                NEXT_STATE  = IDLE_STATE;
+                NEXT_HTRANS = IDLE;
+                NEXT_HWDATA = 16'bzzzzzz;
             end
         end
         else begin
             NEXT_STATE  = IDLE_STATE;
             NEXT_HTRANS = IDLE;
+            NEXT_HWDATA = 16'bzzzzzz;
         end
-        end
+    end
 
     SINGLE_ADDRES: begin
         if(HREADY == 1'b1) begin
             if(NEXT_HWRITE == 1'b1) begin
             NEXT_STATE  = SINGLE_DATA_WRITE;
             NEXT_HTRANS = NONSEQ;
-            NEXT_HWDATA = rDADR;
+            NEXT_ADDR = rCADR;
         end
         else begin
             NEXT_STATE  = SINGLE_DATA_READ;
@@ -152,40 +213,116 @@ always @(*) begin
 
     SINGLE_DATA_READ: begin
         if(HREADY==1'b1) begin
-            DataFromSlave = HRDATA;
-            NEXT_STATE = IDLE_STATE;
+            DataFromSlave[0] = HRDATA;
+            isFinished = 1;
+            NEXT_STATE = SINGLE_STOP;
+          ////  NEXT_STATE = IDLE_STATE;
+            NEXT_HTRANS = IDLE;
         end
         else begin
-            NEXT_STATE = SINGLE_DATA;
-            NEXT_STATE = NONSEQ;
+            NEXT_STATE = SINGLE_DATA_READ;
+            NEXT_HTRANS = NONSEQ;
         end
-
     end
+
     SINGLE_DATA_WRITE: begin
         if(HREADY == 1'b1) begin
-            NEXT_HWDATA = SUM;
-            NEXT_STATE = IDLE_STATE;
+            NEXT_HWDATA = SUM[0];
+            isFinished = 1;
+            NEXT_STATE = SINGLE_STOP;
+     //       NEXT_STATE = IDLE_STATE;
             NEXT_HTRANS = IDLE;
         end else begin
-            NEXT_HWDATA = SUM;
+            NEXT_HWDATA = SUM[0];
             NEXT_STATE = SINGLE_DATA_WRITE;
             NEXT_HTRANS = NONSEQ;
         end
-
-
     end
 
+    SINGLE_STOP: begin
+        NEXT_STATE = IDLE_STATE;
+        NEXT_HTRANS = IDLE;
+
+    end
 
 
     BURST_START: begin
-        if () begin
-            
+        if(HREADY == 1'b1) begin
+            if(NEXT_HWRITE == 1'b1) begin
+                NEXT_HTRANS = NONSEQ;
+                NEXT_STATE = BURST_WR_NEXT;
+                NEXT_ADDR = rCADR; 
+                
+            end else begin
+                NEXT_HTRANS = NONSEQ;
+                NEXT_STATE = BURST_RD_NEXT;
+                NEXT_ADDR = rDADR;
+            end 
+        end    
+        else begin
+             NEXT_STATE = BURST_START;
+             NEXT_HTRANS = NONSEQ;
         end
 
-
-
-
     end
+    BURST_RD_NEXT: begin
+        if(HREADY == 1'b1) begin
+            NEXT_HTRANS = SEQ;
+            NEXT_ADDR = NEXT_ADDR + 1;
+            DataFromSlave[iterator] = HRDATA;
+            if(WhichBurst == 1'b0) begin
+                if(iterator <= 4) begin
+                    NEXT_STATE = BURST_RD_NEXT;
+                    iterator = iterator + 1;
+                end else begin
+                    NEXT_STATE = BURST_STOP;
+                end
+            end else begin
+                if(iterator <= 8) begin
+                    NEXT_STATE = BURST_RD_NEXT;
+                    iterator = iterator+1;
+                end else begin
+                    NEXT_STATE = BURST_STOP;
+                end
+            end
+        end else begin
+            NEXT_STATE = BURST_RD_NEXT;
+        end
+    end
+
+        BURST_WR_NEXT: begin
+        if(HREADY == 1'b1) begin
+            NEXT_HTRANS = SEQ;
+            NEXT_ADDR = NEXT_ADDR + 1;
+            NEXT_HWDATA = SUM[iterator];
+            if(WhichBurst == 1'b0) begin
+                if(iterator <= 4) begin
+                    NEXT_STATE = BURST_WR_NEXT;
+                    iterator = iterator + 1;
+                end else begin
+                    NEXT_STATE = BURST_STOP;
+                end
+            end else begin
+                if(iterator <= 8) begin
+                    NEXT_STATE = BURST_WR_NEXT;
+                    iterator = iterator+1;
+                end else begin
+                    NEXT_STATE = BURST_STOP;
+                end
+            end
+        end else begin
+            NEXT_STATE = BURST_WR_NEXT;
+        end
+    end
+
+
+    BURST_STOP: begin
+        NEXT_STATE = IDLE_STATE;
+        NEXT_HTRANS = IDLE;
+    end
+
+
+    endcase
 
 end
 
