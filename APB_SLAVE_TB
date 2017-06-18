@@ -1,0 +1,65 @@
+module apb_slave_tb 
+(
+  reg                     			pclk,
+  reg                 	    		prst,
+  reg        				[3:0]	paddr,
+  reg								pwrite,
+  reg								psel,
+  reg								penable,
+  reg        				[15:0] 	pwdata,
+  wire								pready,
+  wire						[15:0] 	prdata
+
+  apb_slave #(.addrWidth(4), .dataWidth(16)) DUT (
+  		.pclk(pclk),
+  		.prst(prst),
+  		.paddr(paddr),
+  		.pwrite(pwrite),
+  		.psel(psel),
+  		.penable(penable),
+  		.pwdata(pwdata),
+  		.pready(pready),
+  		.prdata(prdata)
+  	)
+);
+
+  initial begin
+    pclk = 1'b0;
+    prst = 1'b0;
+    repeat(4) #10 clk = ~clk;
+    prst = 1'b1;
+    forever #10 clk = ~clk; // generate a clock
+  end
+
+  initial begin
+  	paddr = 4'b0001;
+  	pwrite = 1'b1;
+  	psel = 1'b1;
+  	pwdata = 16'h0FFF;
+  	@(posedge pclk);
+  	penable = 1'b1;
+  	@(posedge pready);
+	penable = 1'b0;
+
+	paddr = 4'b0100;
+	pwdata = 16'h100F;
+  	@(posedge pclk);
+  	penable = 1'b1;
+  	@(posedge pready);
+	penable = 1'b0;
+
+	pwrite = 1'b0;
+  	paddr = 4'b0001;
+  	@(posedge pclk);
+  	penable = 1'b1;
+  	@(posedge pready);
+	penable = 1'b0;
+
+  	paddr = 4'b0100;
+  	@(posedge pclk);
+  	penable = 1'b1;
+  	@(posedge pready);
+	penable = 1'b0;
+	$finish;
+  end
+ endmodule
