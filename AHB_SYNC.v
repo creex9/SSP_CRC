@@ -5,16 +5,16 @@ module AHB_SYNC #(parameter [31:0] DATA_WIDTH = 16,ADDR_WIDTH = 6)
 	input wire 						req,
 	input wire 	[ADDR_WIDTH-1:0]	DADR,
 	input wire 	[ADDR_WIDTH-1:0]	CADR,
-	input wire 						DLEN,
-	input wire 						DBIT,	
+	input wire 	[1:0]				DLEN,
+	
 
 	//OUTPUTs
 	output reg						ack,
 	output reg 						REGs_ready,
 	output reg 	[ADDR_WIDTH-1:0]	DADR_O,
 	output reg 	[ADDR_WIDTH-1:0]	CADR_O,
-	output reg 						DLEN_O,
-	output reg 						DBIT_O
+	output reg 	[1:0]				DLEN_O
+
 );
 	
 	reg  		Latch1OUT;
@@ -37,7 +37,6 @@ module AHB_SYNC #(parameter [31:0] DATA_WIDTH = 16,ADDR_WIDTH = 6)
 		DADR_O <= DADR;
 		CADR_O <= CADR;
 		DLEN_O <= DLEN;
-		DBIT_O <= DBIT;
 		ack = 1'b1;
 	end else begin
 		ack = 1'b0;
